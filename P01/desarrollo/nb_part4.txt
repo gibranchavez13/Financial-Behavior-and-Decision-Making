@@ -1,0 +1,260 @@
+#%% md
+## 8. Análisis por escenario
+**[ECON]** Primero, dos insumos que usan las discusiones de abajo. La composición de los días de venta (cuántas posiciones se observan y se venden, cuántos días tienen ventas múltiples, qué fracción está en ganancia) y las tasas de realización partidas por información que PGR/PLR descarta: rendimiento reciente de 40 días, peso en cartera y tipo de orden.
+
+#%% code
+PROFILE = pd.DataFrame({k: MAIN[k]["profile"] for k in MAIN}).T
+TIEBREAK = pd.DataFrame({k: MAIN[k]["tiebreak"] for k in MAIN}).T
+PROFILE.to_csv(ROOT / "resultados" / "perfil_dias_de_venta.csv")
+TIEBREAK.to_csv(ROOT / "resultados" / "desempates.csv")
+for k in ("S1", "S3", "S5", "S6"):
+    NUM[f"pos_{k}"] = f"{PROFILE.loc[k, 'positions_per_sale_day']:.1f}"
+    NUM[f"multi_{k}"] = f"{100 * PROFILE.loc[k, 'share_multi_sale_days']:.1f}"
+    NUM[f"gains_{k}"] = f"{100 * PROFILE.loc[k, 'share_paper_gains']:.1f}"
+    NUM[f"pgr_{k}"] = f"{MAIN[k]['conventions']['avg_count']['pgr']:.4f}"
+    NUM[f"plr_{k}"] = f"{MAIN[k]['conventions']['avg_count']['plr']:.4f}"
+for k in MAIN:
+    NUM[f"diff_{k}"], NUM[f"ratio_{k}"] = f"{STAT[k]['diff']:.4f}", f"{STAT[k]['ratio']:.2f}"
+    NUM[f"diffse_{k}"] = f"{MAIN[k]['conventions']['avg_count']['diff_se']:.4f}"
+    NUM[f"bg_{k}"], NUM[f"bn_{k}"] = f"{STAT[k]['bg']:+.2f}", f"{STAT[k]['bn']:+.2f}"
+    NUM[f"bgse_{k}"], NUM[f"bnse_{k}"] = f"{slope_row(MAIN[k], 'OLS', 'gross').se_boot:.2f}", f"{STAT[k]['bn_se']:.2f}"
+    NUM[f"iv_{k}"], NUM[f"ivse_{k}"] = f"{iv[k].slope:+.2f}", f"{iv[k].se_boot:.2f}"
+    NUM[f"ivn_{k}"] = f"{slope_row(MAIN[k], 'IV', 'net').slope:+.2f}"
+    NUM[f"bc_{k}"], NUM[f"turn_{k}"] = f"{bc[k]:.2f}", f"{MAIN[k]['panel']['turnover'].mean():.2f}"
+    NUM[f"cost_{k}"] = f"{MAIN[k]['panel']['costs'].mean():.2f}"
+    NUM[f"frac_{k}"] = f"{MAIN[k]['conventions']['avg_fraction']['diff']:.4f}"
+    NUM[f"lot_{k}"] = f"{MAIN[k]['conventions']['lot_count']['diff']:.4f}"
+    NUM[f"fifo_{k}"] = f"{MAIN[k]['conventions']['fifo_count']['diff']:.4f}"
+    NUM[f"trim_{k}"] = f"{100 * TIEBREAK.loc[k, 'trim_share_of_gain_realizations']:.0f}"
+    for c in ("rate_gain_hot", "rate_gain_not_hot", "rate_loss_hot", "rate_loss_not_hot",
+              "rate_gain_over", "rate_gain_not_over", "rate_loss_over", "rate_loss_not_over"):
+        NUM[f"{c}_{k}"] = f"{TIEBREAK.loc[k, c]:.3f}"
+    NUM[f"difflo_{k}"], NUM[f"diffhi_{k}"] = f"{STAT[k]['lo']:.4f}", f"{STAT[k]['hi']:.4f}"
+    NUM[f"multilot_{k}"] = f"{100 * PROFILE.loc[k, 'share_multi_lot']:.0f}"
+    NUM[f"gap_{k}"] = f"{STAT[k]['bg'] - iv[k].slope:+.2f}"
+NUM["hits"], NUM["n_rules"] = str(int(EVAL["acierto"].sum())), str(len(EVAL))
+# E6 vs E3: composition term 1/(1 + delta(2f - 1)) of the sale-day approximation (Section 3.4)
+comp = {k: 1.0 / (1.0 + 0.8 * (2.0 * PROFILE.loc[k, "share_paper_gains"] - 1.0)) for k in ("S3", "S6")}
+NUM.update(comp_pct=f"{100 * (comp['S6'] / comp['S3'] - 1):.1f}",
+           diff_up_pct=f"{100 * (STAT['S6']['diff'] / STAT['S3']['diff'] - 1):.1f}",
+           pgr_up_pct_S5=f"{100 * (MAIN['S5']['conventions']['avg_count']['pgr'] / MAIN['S1']['conventions']['avg_count']['pgr'] - 1):.1f}")
+display(PROFILE.round(4))
+TIEBREAK.round(4)
+
+#%% md
+**[REF] — Escenarios 1 a 5 (tratamiento breve)**
+
+* **E1 (nulo).**
+  - PGR = {{pgr_S1}}, PLR = {{plr_S1}}, diferencia {{diff_S1}} (EE {{diffse_S1}}): quieto. El nivel coincide con lo registrado ($E[n]/E[n^2]\approx0.048$) y es un tercio del 0.148 de Odean (1998). **Los niveles de PGR no se pueden comparar entre poblaciones con distinto número de posiciones; la razón sí.**
+  - La β bruta MCO es {{bg_S1}} (EE {{bgse_S1}}). Su IC bootstrap excluye el cero y **falla la predicción registrada**: se diagnostica en la discusión de abajo y en §7.5.
+* **E2 (δ = 0.3).**
+  - Diferencia {{diff_S2}} y razón {{ratio_S2}}, frente a $(1+\delta)/(1-\delta)=1.86$: recuperación correcta. Con este mapeo, la razón de Odean (1.51) corresponde a $\delta\approx0.20$.
+  - β bruta MCO {{bg_S2}}, positiva pero dentro del ruido; IV {{iv_S2}}.
+* **E3 (δ = 0.8).**
+  - Diferencia {{diff_S3}} y razón {{ratio_S3}}, por debajo de 9 porque las cuentas con muchas perdedoras venden menos seguido y pesan distinto en PGR y en PLR.
+  - La β bruta MCO es **{{bg_S3}}** (EE {{bgse_S3}}) y la neta **{{bn_S3}}**. Es la mala conducta registrada de antemano: causalidad inversa. La IV bruta es {{iv_S3}}.
+* **E4 y E5 (κ = 0.3 y 0.8).** La disposición queda prácticamente quieta: {{diff_S5}} en E5 y {{diff_S4}} en E4, esta última con IC [{{difflo_S4}}, {{diffhi_S4}}]. Es un rechazo marginal (y de signo contrario al de la disposición) que §7.5 trata como error tipo I.
+  - β neta {{bn_S4}} y {{bn_S5}}, ambas significativas, con −β costos ≈ −{{bc_S4}} y −{{bc_S5}}: prácticamente iguales. $|\beta_{neta}|$ crece en el punto sólo porque la bruta pasa de {{bg_S4}} a {{bg_S5}}, que es ruido.
+  - La dosis de $\kappa$ aparece en el nivel: la rotación media va de {{turn_S1}} a {{turn_S4}} y a {{turn_S5}}, y el costo medio de {{cost_S1}} a {{cost_S4}} y a {{cost_S5}} pp/año.
+  - $\kappa$ también sube el *nivel* de PGR en el nulo (E1 → E5: {{pgr_S1}} → {{pgr_S5}}) porque los días con dos o más ventas pasan de {{multi_S1}} % a {{multi_S5}} %. La razón no se mueve ({{ratio_S1}} → {{ratio_S5}}).
+
+#%% md
+**[REF] — Escenario 6: ambos sesgos activos**
+
+Con $\delta=\kappa=0.8$, la diferencia es {{diff_S6}}, contra {{diff_S3}} en E3 (+{{diff_up_pct}} %), y la razón es {{ratio_S6}} contra {{ratio_S3}}. **Fallaron las dos predicciones registradas para la interacción**: esperábamos una diferencia menor y una razón mayor o igual. El perfil de los días de venta explica por qué. Hay dos efectos y empujan en la misma dirección:
+1. **Composición.** Con $\kappa$ alto, la fracción de ganancias en papel cae de {{gains_S3}} % a {{gains_S6}} %: las ganadoras salen 3.4 veces más rápido y cada posición nueva nace medio diferencial por debajo de su costo. El término $1/(1+\delta(2f-1))$ de la aproximación del §3.4 sube {{comp_pct}} %.
+2. **Saturación.** Los días con dos o más ventas pasan de {{multi_S3}} % a {{multi_S6}} %.
+
+En el pre-análisis supusimos que carteras más jóvenes acumularían *menos* perdedoras; la dirección del efecto composición estaba al revés.
+
+Del lado de la confianza la predicción sí se cumplió. La MCO bruta baja a {{bg_S6}} (E3: {{bg_S3}}), porque $\kappa$ agrega variación exógena de la rotación que diluye la covarianza de la causalidad inversa. La IV queda en {{iv_S6}}.
+
+**Discusión del equipo (E6)**
+
+**[REF]:** La diferencia subió con $\kappa$. ¿Es una interacción conductual entre $\delta$ y $\kappa$ o un artefacto de la contabilidad?
+
+**[ECON]:** Es contable. En el nulo, $\kappa$ por sí sola sube PGR de {{pgr_S1}} a {{pgr_S5}} (+{{pgr_up_pct_S5}} %) sin mover la razón ({{ratio_S1}} → {{ratio_S5}}). En E6, el cambio de composición ({{gains_S3}} % → {{gains_S6}} % de ganancias en papel) explica {{comp_pct}} de los {{diff_up_pct}} puntos porcentuales de aumento, y la saturación el resto.
+
+**[REF]:** Entonces, ¿qué estadístico recupera $\delta$ sin contaminarse de $\kappa$?
+
+**[ECON]:** Ninguno de los dos está limpio. La razón se movió menos que la diferencia ({{ratio_S3}} → {{ratio_S6}}), pero ambas dependen de la composición. Lo invariante es el cociente de riesgos por posición-día, que en los dos escenarios vale $1.8/0.2=9$ por construcción; un estimador de riesgo sobre las tenencias diarias completas lo recuperaría (§11).
+
+#%% md
+**[REF] — Escenario 7: rebalanceo sin disposición**
+
+Sin disposición ($\delta=0$), el rebalanceador produce PGR − PLR = {{diff_S7}} (IC [{{difflo_S7}}, {{diffhi_S7}}]) con razón {{ratio_S7}}. Es un **falso positivo** tan significativo como el efecto verdadero de E2 ($\delta=0.3$). La razón quedó por debajo del rango registrado (2–5), porque hay menos recortes de los que estimamos, pero el signo y la significancia se cumplieron.
+
+Aquí las convenciones deciden la respuesta:
+* Con la convención fraccional la diferencia cae a {{frac_S7}} ({{frac_chg_S7}} %); lote por lote queda en {{lot_S7}} y con FIFO en {{fifo_S7}}.
+* En los otros escenarios con efecto, las mismas alternativas mueven la diferencia entre {{conv_min}} % y {{conv_max}} %.
+* La causa es mecánica: el {{multilot_S7}} % de las posiciones observadas en E7 tiene varios lotes (en E1, el {{multilot_S1}} %), porque las compras de reposición promedian a la baja a las perdedoras, y el {{trim_S7}} % de las ganancias realizadas son recortes parciales.
+
+Del lado de la confianza nada es significativo: β bruta MCO {{bg_S7}} (EE {{bgse_S7}}), IV {{iv_S7}}.
+
+**Discusión del equipo (E7)**
+
+**[REF]:** Si esto fuera un panel real, ¿con qué argumento diríamos que no es disposición?
+
+**[ECON]:** Con tres números que ya produjeron la tabla 11.1 y el §7.3:
+1. El {{trim_S7}} % de las ganancias realizadas son recortes, contra {{trim_S3}} % en E3.
+2. La convención fraccional cambia la diferencia en {{frac_chg_S7}} % en E7 y sólo {{frac_chg_S3}} % en E3.
+3. La tasa de realización depende del **peso** y no del signo: {{rate_gain_over_S7}} para ganancias sobreponderadas y {{rate_loss_over_S7}} para pérdidas sobreponderadas, contra {{rate_gain_not_over_S7}} y {{rate_loss_not_over_S7}} cuando no lo están.
+
+**[REF]:** Pero la convención de Odean es la de conteo. ¿Estamos diciendo que la convención estándar es justo la que vuelve indistinguible al rebalanceador?
+
+**[ECON]:** Sí. Contar como realización completa un recorte que vende una fracción de la posición convierte cada ajuste de pesos en una "ganancia realizada". Por eso la convención fraccional y los datos de órdenes no son un detalle de robustez: son el diagnóstico.
+
+#%% md
+**[REF] — Escenario 8: creencia (falsa) en la reversión**
+
+Con $\delta=0$, la creencia falsa en la reversión produce PGR − PLR = {{diff_S8}} y razón {{ratio_S8}}, dentro de los rangos registrados: otro falso positivo.
+
+A diferencia de E7, las convenciones casi no importan (fraccional {{frac_S8}}, lote por lote {{lot_S8}}), porque estas ventas son salidas completas. La huella está en otro lado: la tasa de realización depende del movimiento de los últimos 40 días y no del signo frente al costo.
+
+| En E8 | subió > 12 % en 40 días | no subió |
+|---|---|---|
+| ganancia | {{rate_gain_hot_S8}} | {{rate_gain_not_hot_S8}} |
+| pérdida | {{rate_loss_hot_S8}} | {{rate_loss_not_hot_S8}} |
+
+Del lado de la confianza: β bruta MCO {{bg_S8}} (EE {{bgse_S8}}), IV {{iv_S8}}.
+
+**Discusión del equipo (E8)**
+
+**[REF]:** El estimador castiga una creencia como si fuera una preferencia. ¿Hay algo en los conteos que la delate?
+
+**[ECON]:** En los cuatro conteos, nada. Condicionando en el movimiento reciente, la separación es total: una *pérdida* que subió más de 12 % se vende con tasa {{rate_loss_hot_S8}}, casi la misma que una ganancia que subió ({{rate_gain_hot_S8}}). En E3 pasa lo contrario: {{rate_loss_hot_S3}} contra {{rate_gain_hot_S3}}.
+
+**[REF]:** ¿Y al creyente le cuesta estar equivocado?
+
+**[SIM]:** Antes de costos, no se distingue de cero: lo comprado menos lo vendido a 252 días en E8 da {{bms_S8}} pp (EE {{bms_S8_se}}), porque en este mundo no hay reversión ni momento que aprovechar. Lo que paga es la rotación: su costo medio es {{cost_S8}} pp/año, contra {{cost_S1}} en E1.
+
+#%% md
+**Discusión del equipo (E1 y E3: cuando el estimador de confianza se porta mal)**
+
+**[REF]:** En E1 se rechaza β bruta = 0 al 5 %. El enunciado dice que en ese caso hay que depurar antes de interpretar. ¿Es un error de código?
+
+**[ECON]:** Se depuró con tres pruebas que se ejecutan en este cuaderno:
+1. La prueba estructural y la de fuga (§6) descartan que se use información futura.
+2. El Monte Carlo sobre {{R_MC}} mundos (§7.5) da una β bruta media de {{mc_mean_b_S1}} en E1, con DE ({{mc_sd_b_S1}}) igual al EE bootstrap y {{mc_reject_S1}} % de rechazos: no hay sesgo ni SE mal calibrado.
+3. Lo que queda es un componente propio de esta trayectoria (reversión transversal realizada {{rev_base}}, z = {{rev_z}}; seis réplicas heterogéneas sobre la misma trayectoria dan una IV(h₀) media de {{rep_ivh_E9}}) más una cola de la muestra de cuentas.
+
+Ninguna de las dos cosas es un error, y ninguna justifica cambiar la semilla.
+
+**[REF]:** ¿Y E3, donde la pendiente neta sale positiva?
+
+**[ECON]:** La MCO bruta es {{bg_S3}} y la IV {{iv_S3}}; la brecha es causalidad inversa. Una cuenta con suerte acumula ganadoras, las vende rápido (riesgo × 1.8) y registra más rotación. Con datos reales esa brecha sólo se ve con un instrumento como el género de Barber–Odean (2001). Aquí sale gratis porque conocemos $h_{0,i}$.
+
+#%% md
+## 9. Diagnóstico de la pendiente bruta
+**[ECON]** Como aquí no se puede operar informado, una pendiente bruta distinta de cero sólo puede venir de cinco fuentes: (1) una violación de la restricción, (2) arrastre de caja, (3) diferencial dentro del precio, (4) efectos de capitalización y (5) causalidad inversa. Cada una se prueba con una ablación ejecutada; ninguna se descarta sólo con argumentos.
+
+* (1) La descartan la prueba estructural y la de fuga del §6.
+* (2) Se repiten los ocho escenarios con una **ventana de caja de 21 días**, con la misma población y las mismas decisiones aleatorias.
+* (3) Se recalcula el rendimiento bruto **marcando las operaciones al precio de ejecución** en vez del precio medio.
+* (4) Se usan rendimientos **logarítmicos** en lugar de aritméticos.
+* (5) Se usa **2SLS con la intensidad ex ante $h_{0,i}$**, que los rendimientos no pueden causar.
+
+Además se verifica la identidad $\beta_{neta}-\beta_{bruta}=-\beta_{costos}$.
+
+#%% code
+t_block = time.perf_counter()
+LAG = {k: run(dataclasses.replace(SCN[k], key=f"{k}·c21", cash_lag_days=21), i)
+       for i, k in enumerate(MAIN, start=1)}
+MARKET_GBM = sp.simulate_market(dataclasses.replace(MARKET_CFG, gbm=True),
+                                np.random.default_rng(sa.child_seed(MASTER, 40)))
+GBM = {k: run(dataclasses.replace(SCN[k], key=f"{k}·GBM"), i, MARKET_GBM) for i, k in ((1, "S1"), (3, "S3"))}
+print(f"Ablaciones: {time.perf_counter() - t_block:.1f} s")
+rows = []
+for k, res in MAIN.items():
+    s = {o: slope_row(res, "OLS", o).slope for o in se.OUTCOMES}
+    lag_g = slope_row(LAG[k], "OLS", "gross")
+    rows.append({"Esc.": k, "β bruta (medio)": s["gross"], "EE": slope_row(res, "OLS", "gross").se_boot,
+                 "Δ precio de ejecución": s["gross_fill"] - s["gross"],
+                 "Δ caja 21 días": lag_g.slope - s["gross"],
+                 "caja media (%)": 100 * LAG[k]["panel"]["cash_share"].mean(),
+                 "Δ logarítmico": s["gross_log"] - s["gross"], "β IV bruta": iv[k].slope, "EE IV": iv[k].se_boot,
+                 "β neta − β bruta": s["net"] - s["gross"], "−β costos": -s["costs"],
+                 "discrepancia identidad": abs(s["net"] - s["gross"] + s["costs"])})
+DIAG = pd.DataFrame(rows).set_index("Esc.")
+DIAG.to_csv(ROOT / "resultados" / "diagnostico_pendiente_bruta.csv")
+ew_realized = 100 * MARKET.returns.mean() * 252  # what an account holds on average: the equal-weighted universe
+cash_pred = -(21 / 252) * ew_realized
+NUM.update(cash_pred=f"{cash_pred:+.2f}", ew_realized=f"{ew_realized:.2f}",
+           cash_pred_mkt=f"{-(21 / 252) * MSUM['market_mean_realized'] * 100:+.2f}",
+           cash_neg=str(int((DIAG["Δ caja 21 días"] < 0).sum())),
+           cash_mean=f"{DIAG['Δ caja 21 días'].mean():+.2f}",
+           cash_min=f"{DIAG['Δ caja 21 días'].min():+.2f}", cash_max=f"{DIAG['Δ caja 21 días'].max():+.2f}",
+           fill_mean=f"{DIAG['Δ precio de ejecución'].mean():+.3f}", log_min=f"{DIAG['Δ logarítmico'].min():+.2f}",
+           log_max=f"{DIAG['Δ logarítmico'].max():+.2f}", ident_max=f"{DIAG['discrepancia identidad'].max():.1e}",
+           cashshare=f"{DIAG['caja media (%)'].mean():.1f}")
+DIAG.round(3)
+
+#%% code
+fig, ax = plt.subplots(figsize=(12.5, 4.4))
+x = np.arange(len(MAIN))
+series = (("OLS", "gross", "β bruta MCO", COLORS["accent"], -0.24), ("OLS", "net", "β neta MCO", COLORS["loss"], -0.08),
+          ("IV", "gross", "β bruta IV (h₀)", COLORS["gain"], 0.08), ("IV", "net", "β neta IV (h₀)", COLORS["alt"], 0.24))
+for method, outcome, lab, col, dx in series:
+    r = [slope_row(MAIN[k], method, outcome) for k in MAIN]
+    y = np.array([q.slope for q in r])
+    err = np.array([[q.slope - q.ci_lo for q in r], [q.ci_hi - q.slope for q in r]])
+    ax.errorbar(x + dx, y, yerr=err, fmt="o", color=col, capsize=3, label=lab)
+ax.axhline(0, color="k", lw=0.8)
+ax.axhline(-np.mean(list(bc.values())), color="grey", ls=":", lw=1.2, label="−costo medio por unidad de rotación")
+ax.set_xticks(x, [f"{k}\nδ={SCN[k].delta}, κ={SCN[k].kappa}\n{CONF[SCN[k].confound]}" for k in MAIN], fontsize=8)
+ax.set(ylabel="pp de rendimiento anual por unidad de rotación", title="(c) Pendientes bruta y neta por escenario (IC 95 % bootstrap por cuenta)")
+ax.legend(ncol=3, fontsize=8)
+savefig(fig, "fig_c_pendientes.png")
+
+#%% md
+**Figura (c).** Pendientes de Barber–Odean por escenario: MCO en azul (bruta) y rojo (neta); 2SLS con $h_0$ como instrumento en verde (bruta) y naranja (neta). La línea punteada marca el costo medio por unidad de rotación. En los escenarios 2, 3 y 6 (disposición) la MCO bruta se separa de la IV. Esa brecha es la causalidad inversa.
+
+#%% code
+def beta_control_effect(res: dict) -> dict:
+    """Gross OLS slope with and without the portfolio-beta control."""
+    p = res["panel"]
+    base = np.column_stack([np.ones(len(p)), p["turnover"], p["log_wealth"], p["n_positions"]])
+    y = p[["gross"]].to_numpy()
+    without, with_beta = (se.fit_linear(y, x_)["coef"][1, 0] for x_ in (base, np.column_stack([base, p["beta"]])))
+    return {"β bruta sin control de beta": without, "β bruta con control de beta": with_beta,
+            "DE transversal de la beta de cartera": p["beta"].std(),
+            "corr(rotación, beta)": p["turnover"].corr(p["beta"])}
+
+
+FACTOR_VS_GBM = pd.DataFrame({f"{k} {lab}": beta_control_effect(r)
+                              for k in ("S1", "S3") for lab, r in (("factores", MAIN[k]), ("GBM", GBM[k]))})
+NUM.update({f"fg_{k}_{lab}_{w}": format(FACTOR_VS_GBM.loc[row, f"{k} {name}"], fmt)
+            for k in ("S1", "S3") for lab, name in (("f", "factores"), ("g", "GBM"))
+            for w, row, fmt in (("sin", "β bruta sin control de beta", "+.2f"),
+                                ("con", "β bruta con control de beta", "+.2f"),
+                                ("sd", "DE transversal de la beta de cartera", ".3f"))})
+FACTOR_VS_GBM.round(3)
+
+#%% md
+**[ECON] — Diagnóstico de la pendiente bruta**
+
+En la línea base **no hay pendiente bruta negativa que diagnosticar**: las MCO brutas van de {{bg_S5}} (E5) a {{bg_S3}} (E3). El signo que hay que explicar es positivo, y las ablaciones asignan cada fuente así:
+1. **Violación de la restricción:** descartada por las dos pruebas del §6.
+2. **Arrastre de caja:**
+   - Con 21 días en efectivo, la caja media sube a {{cashshare}} % y la β bruta cae en {{cash_neg}} de 8 escenarios, en promedio {{cash_mean}} pp (rango {{cash_min}} a {{cash_max}}).
+   - La predicción mecánica es la fracción ociosa por unidad de rotación (21/252) multiplicada por el rendimiento realizado del universo equiponderado ({{ew_realized}} %/año): {{cash_pred}} pp. Con el rendimiento del factor de mercado, que fue lo que se registró, sería {{cash_pred_mkt}}. El referente correcto es el universo, porque eso es lo que las cuentas tienen en cartera; el pre-análisis usó el equivocado.
+   - La ablación no es un contrafactual pareado: las decisiones divergen desde la primera venta, así que cada Δ trae un ruido del orden del EE. Con ese ruido, un promedio de {{cash_mean}} frente a una predicción de {{cash_pred}} es compatible; lo robusto es el signo.
+   - En el mercado de Barber–Odean (17.9 %/año), la misma ventana costaría del orden de −1.5 pp por unidad de rotación. Ahí sí podría fabricar una pendiente bruta negativa.
+3. **Diferencial dentro del precio:** marcar a precio de ejecución mueve la β bruta en {{fill_mean}} pp en todos los escenarios, que es exactamente el diferencial de ida y vuelta (2 × 10 pb) por unidad de rotación. Si el "bruto" se construyera así, aparecería por pura definición una pendiente de −0.2 pp.
+4. **Capitalización:** con rendimientos logarítmicos, la pendiente se mueve entre {{log_min}} y {{log_max}} pp. Es despreciable.
+5. **Causalidad inversa:** es la fuente dominante. La brecha MCO − IV es grande donde la regla de venta depende del precio de compra (E2 {{gap_S2}}, E3 {{gap_S3}}, E6 {{gap_S6}}), variable en los confusores (E7 {{gap_S7}}, E8 {{gap_S8}}) y chica en los escenarios sin mecanismo (E4 {{gap_S4}}, E5 {{gap_S5}}).
+
+La identidad $\beta_{neta}-\beta_{bruta}=-\beta_{costos}$ se cumple con una discrepancia máxima de {{ident_max}}.
+
+Sobre la estructura de factores: el control de beta casi no absorbe nada (en E3, {{fg_S3_f_sin}} sin control y {{fg_S3_f_con}} con control; la DE de la beta de cartera es sólo {{fg_S3_f_sd}}), porque veinte posiciones al azar diversifican la beta. Lo que la estructura de factores sí cambia es la inferencia: los choques comunes sincronizan entre cuentas la mezcla de ganadoras y perdedoras (§7.5).
+
+#%% md
+**Discusión del equipo (§9)**
+
+**[REF]:** El enunciado espera una pendiente bruta negativa y aquí no aparece. ¿No será que el diseño la esconde?
+
+**[ECON]:** El diseño hace imposible la única fuente "genuina", la desinformación. Las otras dos fuentes que dan una pendiente negativa (caja y diferencial) se fabricaron a propósito: el precio de ejecución da −0.20 exacto y 21 días de caja dan {{cash_mean}} en promedio. Ambas tienen el signo que predice su mecánica.
+
+**[REF]:** Entonces, ¿qué dice el resultado de Barber–Odean, con su pendiente bruta plana?
+
+**[ECON]:** Si los inversores reales tienen disposición (la razón de Odean corresponde a $\delta\approx0.2$ en nuestro mapeo), su MCO bruta está sesgada hacia arriba por causalidad inversa, como en E2 ({{bg_S2}} contra una IV de {{iv_S2}}). Una pendiente bruta plana podría ser entonces una desinformación negativa (los −3.2 pp de Odean 1999) compensada por esa causalidad inversa positiva. Es una hipótesis que sus datos no pueden descartar sin un instrumento.

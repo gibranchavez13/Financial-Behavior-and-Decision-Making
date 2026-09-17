@@ -1,0 +1,3 @@
+registered_utc=2026-09-10T23:17:59Z
+pre_analisis.md=df22412ecfa7b292bf7d36fc4e91d2bdf434d29dbe9d23ede4ad027ac7a7d908
+pre_analisis_reglas.json=ef2be36923492b1f35f1ef515847fedaf648848a237b2d36a3767f3f37a363bd

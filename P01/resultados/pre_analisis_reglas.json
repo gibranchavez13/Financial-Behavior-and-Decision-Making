@@ -1,0 +1,11 @@
+{
+  "description": "Codified pre-registered predictions used for the hit/miss flags. diff = PGR-PLR (average cost, count convention); ci = 95% account-bootstrap percentile CI; b_gross/b_net = OLS slopes (pp per unit of annual turnover) with account-bootstrap CI; iv_gross = 2SLS gross slope.",
+  "S1": [["diff_ci_contains_0"], ["b_gross_ci_contains_0"], ["iv_gross_ci_contains_0"]],
+  "S2": [["diff_positive_sig"], ["diff_in", 0.02, 0.04], ["ratio_in", 1.5, 2.2], ["b_gross_positive"], ["iv_gross_ci_contains_0"]],
+  "S3": [["diff_positive_sig"], ["diff_in", 0.07, 0.13], ["ratio_in", 5.0, 11.0], ["b_gross_positive_sig"], ["b_net_not_negative_sig"], ["iv_gross_ci_contains_0"], ["diff_greater_than", "S2"]],
+  "S4": [["diff_ci_contains_0"], ["b_gross_ci_contains_0"], ["b_net_negative_sig"], ["b_net_minus_gross_in", -1.8, -0.7]],
+  "S5": [["diff_ci_contains_0"], ["b_gross_ci_contains_0"], ["b_net_negative_sig"], ["b_net_minus_gross_in", -1.8, -0.7], ["b_net_within_2se_of", "S4"]],
+  "S6": [["diff_positive_sig"], ["diff_less_than", "S3"], ["ratio_at_least", "S3"], ["b_gross_positive"], ["b_gross_less_than", "S3"], ["iv_gross_ci_contains_0"]],
+  "S7": [["diff_positive_sig"], ["ratio_in", 2.0, 5.0], ["fractional_diff_reduction_at_least", 0.40], ["b_gross_positive"]],
+  "S8": [["diff_positive_sig"], ["diff_in", 0.015, 0.05], ["ratio_in", 1.3, 3.0], ["b_gross_positive"]]
+}

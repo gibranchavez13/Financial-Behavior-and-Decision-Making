@@ -1,0 +1,12 @@
+﻿python : C:\Users\gibra\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\zmq\_future.py:718: RuntimeWarning: Proactor event loop 
+does not implement add_reader family of methods required for zmq. Registering an additional selector thread for add_reader support via tornado. Use 
+`asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())` to avoid this warning.
+At line:1 char:407
++ ... cratchpad"; python "$sp\build_nb.py" --execute *> "$sp\build1.log"; G ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\Users\gibra\...d this warning.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  self._get_loop()
+95 cells; code cells over 60 lines: [(32, 62)]
+executed and saved C:\ifi\5\Comportamiento\simulador_sesgos_conductuales.ipynb

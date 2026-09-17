@@ -1,0 +1,187 @@
+#%% md
+## 5. Implementación
+**[SIM]** El simulador vive en cuatro archivos `.py` que las celdas `%%writefile` siguientes escriben en la carpeta (`-a` agrega el siguiente bloque al mismo archivo) y que luego se importan:
+
+* **`simulador.py`, el archivo principal.** Define la malla de ocho escenarios, las calibraciones y la semilla maestra. `run_scenario` simula una población y le aplica todos los estimadores, `run_grid` corre los ocho escenarios y `results_table` arma la tabla de resultados. Importa los otros tres módulos y también se puede ejecutar solo: `python simulador.py`.
+* `simlib_precios.py`: universo de precios (modelo de factores, cotización al centavo, rendimientos a plazo).
+* `simlib_agentes.py`: población, mecanismo inyectado, libro de lotes FIFO y ciclo diario vectorizado sobre cuentas y valores. El único bucle es el de días, que es secuencial por naturaleza.
+* `simlib_estimadores.py`: conteos de Odean, bootstraps, regresiones MCO/2SLS con errores HC1 y bootstrap por cuenta, prueba de fuga y diagnósticos.
+
+Cada archivo empieza con el pre-análisis registrado, copiado como comentarios (`#`). Al volver a ejecutar el cuaderno se regeneran los cuatro archivos, así que el cuaderno es autocontenido.
+
+#%% modules
+
+#%% code
+import dataclasses
+import importlib
+
+import matplotlib.pyplot as plt
+from IPython.display import Markdown, display
+
+import simlib_agentes as sa
+import simlib_estimadores as se
+import simlib_precios as sp
+import simulador as sim
+
+for module in (sp, sa, se, sim):  # the %%writefile cells above may have rewritten them
+    importlib.reload(module)
+for name in ("simlib_precios.py", "simlib_agentes.py", "simlib_estimadores.py", "simulador.py"):
+    text = (ROOT / name).read_text(encoding="utf-8")
+    print(f"{name:24s} {len(text.splitlines()):4d} líneas   sha256 {hashlib.sha256(text.encode()).hexdigest()[:16]}…")
+
+pd.set_option("display.width", 220)
+pd.set_option("display.max_columns", 40)
+pd.set_option("display.float_format", lambda v: f"{v:,.4f}")
+plt.rcParams.update({"figure.dpi": 100, "savefig.dpi": 160, "axes.grid": True, "grid.alpha": 0.3,
+                     "axes.spines.top": False, "axes.spines.right": False, "font.size": 10})
+COLORS = {"gain": "#1b7837", "loss": "#b2182b", "neutral": "#4d4d4d", "accent": "#2166ac",
+          "alt": "#e08214"}
+NUM: dict[str, str] = {}  # every number quoted in the prose; the last cell checks the text
+
+
+def savefig(fig: plt.Figure, name: str) -> None:
+    """Save a figure to figuras/ (160 dpi) and display it."""
+    fig.savefig(ROOT / "figuras" / name, bbox_inches="tight")
+    plt.show()
+
+#%% code
+assert sim.MASTER_SEED == MASTER_SEED
+MASTER, N_BOOT, MARKET_CFG, BEH, COSTS = sim.MASTER, sim.N_BOOT, sim.MARKET_CFG, sim.BEH, sim.COSTS
+GRID, SCN, CONF, slope_row = sim.GRID, sim.SCN, sim.CONFOUND_LABELS, sim.slope_row
+
+
+def run(scn: sa.ScenarioConfig, stream: int, market: sp.Market | None = None, **kwargs) -> dict:
+    """``simulador.run_scenario`` on MARKET unless another market is given."""
+    return sim.run_scenario(scn, stream, MARKET if market is None else market, **kwargs)
+
+
+pd.DataFrame(sim.STREAMS, columns=["uso", "spawn_key bajo la semilla maestra"])
+
+#%% code
+MARKET = sim.build_market()
+MSUM = sp.correlation_summary(MARKET)
+cov = sp.implied_covariance(MARKET)
+vol = np.sqrt(np.diag(cov))
+off = ~np.eye(len(vol), dtype=bool)
+fig, ax = plt.subplots(1, 3, figsize=(15.5, 4.2))
+days = np.arange(MARKET.prices.shape[0])
+for s in np.random.default_rng(0).choice(MARKET_CFG.n_securities, 12, replace=False):
+    ax[0].plot(days, 100 * MARKET.prices[:, s] / MARKET.prices[0, s], lw=0.8, alpha=0.7)
+ax[0].plot(days, 100 * np.concatenate([[1.0], np.cumprod(1 + MARKET.market_returns)]),
+           color="k", lw=2.2, label="factor de mercado")
+ax[0].set(xlabel="día hábil", ylabel="precio (base 100)", title="(a1) 12 valores y el factor de mercado")
+ax[0].legend()
+ax[1].hist((cov / np.outer(vol, vol))[off], bins=40, alpha=0.6, density=True, label="implícita")
+ax[1].hist(np.corrcoef(MARKET.returns.T)[off], bins=40, alpha=0.5, density=True, label="realizada")
+ax[1].set(xlabel="correlación por pares (rendimientos diarios)", ylabel="densidad",
+          title="(a2) Estructura de correlación")
+ax[1].legend()
+grid_b = np.linspace(0.3, 1.8, 10)
+ax[2].scatter(MARKET.betas, MARKET.returns.mean(0) * 25200, s=14, color=COLORS["accent"], alpha=0.7)
+ax[2].plot(grid_b, grid_b * MSUM["market_mean_realized"] * 100, color="k", label="β × mercado realizado")
+ax[2].plot(grid_b, grid_b * MARKET_CFG.mu_market * 100, color=COLORS["alt"], ls="--",
+           label="β × μ_M (esperado)")
+ax[2].set(xlabel="beta de mercado β_s", ylabel="rendimiento realizado (% anual)",
+          title="(a3) Beta y rendimiento realizado")
+ax[2].legend()
+savefig(fig, "fig_a_precios_factores.png")
+NUM.update(corr_implied=f"{MSUM['corr_implied_mean']:.2f}", corr_realized=f"{MSUM['corr_realized_mean']:.2f}",
+           vol_implied=f"{100 * MSUM['vol_implied_mean']:.1f} %",
+           mkt_realized=f"{100 * MSUM['market_mean_realized']:.1f}",
+           mkt_vol=f"{100 * MSUM['market_vol_realized']:.1f}")
+pd.Series(MSUM, name="valor").to_frame().T
+
+#%% md
+**Figura (a).** Izquierda: 12 valores al azar y el factor de mercado, base 100. Centro: distribución de las correlaciones por pares implícitas en el modelo y realizadas en la muestra. Derecha: rendimiento anual realizado de cada valor contra su beta. La dispersión alrededor de la recta es riesgo idiosincrático puro, sin alfa, y la pendiente la fija el único mercado realizado de la muestra.
+
+#%% code
+t_block = time.perf_counter()
+MAIN = sim.run_grid(MARKET)
+print(f"Ocho escenarios con estimadores y bootstrap ({N_BOOT} réplicas): "
+      f"{time.perf_counter() - t_block:.1f} s")
+trade_values = MAIN["S1"]["trade_values"]
+NUM.update(median_trade=f"{np.median(trade_values):,.0f}",
+           median_trade_bps=f"{1e4 * COSTS.commission_usd / np.median(trade_values):.0f}",
+           mean_trade=f"{trade_values.mean():,.0f}",
+           mean_trade_bps=f"{1e4 * COSTS.commission_usd / trade_values.mean():.0f}")
+
+#%% md
+## 6. Validación de la restricción principal
+**[SIM]** La restricción ("los rendimientos futuros son independientes de la decisión de operar") se verifica dos veces.
+
+1. **Estructural.** Si en el día $t$ el motor leyera algún precio posterior a $t$, cambiar el futuro cambiaría decisiones pasadas. Se corren los tres tipos de regla (disposición E3, rebalanceo E7 y reversión E8) sobre la trayectoria original y sobre otra idéntica hasta $t^*=378$ con un futuro distinto, con la misma población y los mismos números aleatorios. Todo lo anterior a $t^*$ debe coincidir bit a bit, y lo posterior debe diferir, porque si no la prueba no tendría poder.
+2. **Estadística (prueba de fuga).** Con todas las compras de las 8 poblaciones juntas, se estima la regresión del rendimiento realizado a 20 y 120 días del valor comprado sobre un indicador de compra con efectos fijos de día; el grupo de control es el universo del mismo día. Hay miles de compras pero sólo 100 valores y una trayectoria, así que el SE es Newey–West sobre las sumas diarias con tantos rezagos como días tiene la ventana. Se agrega la comparación de Odean (1999): rendimiento a 252 días de lo comprado menos lo vendido.
+
+#%% code
+T_STAR = 378
+other = sp.simulate_market(MARKET_CFG, np.random.default_rng(sa.child_seed(MASTER, 31)))
+alt_prices = MARKET.prices.copy()
+alt_prices[T_STAR + 1:] = np.maximum(np.round(
+    MARKET.prices[T_STAR] * other.prices[T_STAR + 1:] / other.prices[T_STAR], 2), 0.01)
+ALT = dataclasses.replace(MARKET, prices=alt_prices, returns=alt_prices[1:] / alt_prices[:-1] - 1.0)
+
+
+def records_until(sim: sa.SimulationResult, table: str, last_day: int) -> dict:
+    """Columns of a record table restricted to days <= last_day."""
+    tab = sim.tables[table]
+    keep = tab["day"] <= last_day
+    return {c: v[keep] for c, v in tab.items()}
+
+
+rows = []
+for key, stream in (("S3", 3), ("S7", 7), ("S8", 8)):
+    seed = sa.child_seed(MASTER, stream)
+    pop = sa.draw_population(SCN[key], BEH, seed)
+    a, b = (sa.simulate_trading(m, pop, SCN[key], BEH, COSTS, seed) for m in (MARKET, ALT))
+    equal = all(np.array_equal(records_until(a, t, T_STAR)[c], records_until(b, t, T_STAR)[c])
+                for t in ("sales", "buys", "snapshots") for c in a.tables[t])
+    equal &= np.array_equal(a.gross[:T_STAR], b.gross[:T_STAR])
+    after = [np.column_stack([s.tables["sales"][c][s.tables["sales"]["day"] > T_STAR]
+                              for c in ("account", "day", "security")]) for s in (a, b)]
+    shared = len({tuple(r) for r in after[0]} & {tuple(r) for r in after[1]})
+    rows.append({"escenario": key, "ventas hasta t*": int((a.tables["sales"]["day"] <= T_STAR).sum()),
+                 "todo idéntico hasta t*": equal,
+                 "ventas después de t* (original / alterno)": f"{len(after[0])} / {len(after[1])}",
+                 "ventas coincidentes después de t*": shared})
+INVARIANCE = pd.DataFrame(rows)
+after_s3 = INVARIANCE.loc[0, "ventas después de t* (original / alterno)"].split(" / ")[0]
+NUM.update(inv_after_S3=f"{int(after_s3):,}", inv_shared_S3=f"{INVARIANCE.loc[0, 'ventas coincidentes después de t*']:,}")
+INVARIANCE
+
+#%% code
+events = [MAIN[k]["buys"] for k in MAIN]
+LEAK = pd.DataFrame([se.leakage_test(events, MARKET, h, adj) for h in (20, 120) for adj in (False, True)])
+LEAK["ajuste"] = np.where(LEAK["adjusted"], "β × mercado", "crudo")
+pooled_buys = tuple(np.concatenate([MAIN[k]["buys"][j] for k in MAIN]) for j in (0, 1))
+pooled_sales = tuple(np.concatenate([MAIN[k]["sales"][j] for k in MAIN]) for j in (0, 1))
+BMS = pd.DataFrame([{"escenario": k, **se.bought_minus_sold(MAIN[k]["buys"], MAIN[k]["sales"], MARKET, 252, adj)}
+                    for k in list(MAIN) for adj in (False, True)]
+                   + [{"escenario": "todos", **se.bought_minus_sold(pooled_buys, pooled_sales, MARKET, 252, adj)}
+                      for adj in (False, True)])
+LEAK.to_csv(ROOT / "resultados" / "prueba_fuga.csv", index=False)
+BMS.to_csv(ROOT / "resultados" / "comprado_menos_vendido.csv", index=False)
+NUM.update(leak20_p=f"{LEAK.loc[0, 'p']:.2f}", leak120_p=f"{LEAK.loc[2, 'p']:.2f}",
+           leak20_coef=f"{LEAK.loc[0, 'coef_pp']:+.3f}", leak120_coef=f"{LEAK.loc[2, 'coef_pp']:+.3f}",
+           leak20_se=f"{LEAK.loc[0, 'se_pp']:.3f}", leak120_se=f"{LEAK.loc[2, 'se_pp']:.3f}",
+           leak_nbuys=f"{LEAK.loc[0, 'n_buys']:,}",
+           bms_all=f"{BMS.iloc[-2]['diff_pp']:+.2f}", bms_all_se=f"{BMS.iloc[-2]['se_pp']:.2f}",
+           bms_all_adj=f"{BMS.iloc[-1]['diff_pp']:+.2f}", bms_all_adj_se=f"{BMS.iloc[-1]['se_pp']:.2f}",
+           bms_n_sig=str(int((BMS["p"] < 0.05).sum())), bms_n=str(len(BMS)),
+           bms_sig_list=", ".join(sorted({k.replace("S", "E") for k in BMS.loc[BMS["p"] < 0.05, "escenario"]})))
+for key in ("S7", "S8"):
+    row = BMS[(BMS["escenario"] == key) & ~BMS["adjusted"]].iloc[0]
+    NUM.update({f"bms_{key}": f"{row['diff_pp']:+.2f}", f"bms_{key}_se": f"{row['se_pp']:.2f}",
+                f"bms_{key}_t": f"{row['t']:.1f}"})
+NUM["leak_mde"] = f"{2.8 * LEAK.loc[2, 'se_pp']:.2f}"  # 80 % power at 5 %: 2.8 standard errors
+display(LEAK[["horizon", "ajuste", "coef_pp", "se_pp", "t", "p", "n_buys", "n_days"]]
+        .rename(columns={"horizon": "ventana (días)", "coef_pp": "coef. (pp)", "se_pp": "EE NW (pp)",
+                         "n_buys": "N compras", "n_days": "N días"}))
+BMS.pivot(index="escenario", columns="adjusted", values=["diff_pp", "se_pp"]).round(2)
+
+#%% md
+**[SIM] — Interpretación**
+
+* **Estructural.** En los tres tipos de regla, todas las ventas, compras, fotografías y rendimientos hasta $t^*$ coinciden bit a bit entre el mercado original y el alterno. Después de $t^*$ divergen: en E3 sólo {{inv_shared_S3}} de {{inv_after_S3}} ventas coinciden. La prueba tiene poder: los agentes sí reaccionan a los precios, pero sólo a los que ya se revelaron.
+* **Estadística.** Con {{leak_nbuys}} compras agrupadas de los ocho escenarios, el coeficiente del indicador de compra es {{leak20_coef}} pp a 20 días (EE {{leak20_se}}, p = {{leak20_p}}) y {{leak120_coef}} pp a 120 días (EE {{leak120_se}}, p = {{leak120_p}}). Es nulo crudo y ajustado por β.
+* **Odean (1999).** Tampoco aparece su resultado: lo comprado menos lo vendido a 252 días da {{bms_all}} pp (EE {{bms_all_se}}), frente a −3.2 pp en sus datos. De {{bms_n}} comparaciones (crudas y ajustadas), {{bms_n_sig}} son significativas al 5 %, todas en {{bms_sig_list}}; la cruda de E7 da {{bms_S7}} pp (t = {{bms_S7_t}}). Es el rebalanceador, que compra perdedoras recientes y vende ganadoras recientes. Como la prueba estructural descarta fuga, se lee como un rasgo de esta trayectoria (reversión transversal realizada, §7.5) y no como información.
+* **Poder.** El EE a 120 días es {{leak120_se}} pp: con 80 % de potencia la prueba detecta fugas de {{leak_mde}} pp por ventana. Como advierte Merton (1980) en el `.tex` de media-varianza, la precisión la fijan el lapso calendario y los 100 valores, no el número de compras.

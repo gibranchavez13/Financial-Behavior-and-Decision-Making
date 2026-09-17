@@ -1,0 +1,12 @@
+prueba,estimación,IC 95 %,veredicto
+Nulo — PGR−PLR (E1),+0.0007,"[-0.0002, 0.0017]",✔ quieto
+"Nulo — β bruta MCO (E1), EE bootstrap",+1.39,"[0.20, 2.64]",✘ no quieto
+"Nulo — β bruta MCO (E1), DE Monte Carlo",t = 2.36,"[0.23, 2.55]",✘ no quieto
+Nulo — β bruta IV (E1),+0.83,"[-0.40, 2.07]",✔ quieto
+Monotonía — PGR−PLR: E2 → E3,0.0276 → 0.0846,,✔ crece
+Monotonía — |β neta|: E4 → E5,0.84 → 1.06,dif. +0.23 (EE 0.42),"✔ crece, no significativo"
+   descomposición: β costos E4 → E5,1.165 → 1.158,,plano (< 0.1 pp)
+   descomposición: β bruta E4 → E5,+0.33 → +0.09,,cambio -0.24
+Silencio cruzado — β bruta MCO en E2 / E3,+1.71 / +5.26,"[0.62, 2.73] / [4.03, 6.35]",✘ no quieto / ✘ no quieto
+Silencio cruzado — β bruta IV en E2 / E3,+0.29 / +1.05,"[-1.01, 1.44] / [-0.37, 2.37]",✔ quieto / ✔ quieto
+Silencio cruzado — PGR−PLR en E4 / E5,-0.0008 / +0.0000,"[-0.0015, -0.0000] / [-0.0006, 0.0006]",✘ no quieto / ✔ quieto

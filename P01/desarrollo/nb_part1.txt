@@ -1,0 +1,192 @@
+#%% md informe
+# Simulador de sesgos conductuales: efecto disposición y exceso de confianza
+
+**Proyecto 1 — Decision-Making Foundations & Behavioral Finance (ITESO), Prof. Luis Felipe Gómez Estrada.**
+Pista principal: **A (efecto disposición)**; la pista B (exceso de confianza) se ejecuta completa como estimador de control cruzado.
+
+| Rol | Responsable de |
+|---|---|
+| **[SIM] Arquitecto de simulación** | proceso generador de datos: precios, agentes, costos, mecanismos inyectados, reproducibilidad y la restricción de no-información |
+| **[ECON] Econometrista conductual** | contabilidad PGR/PLR y sus convenciones, bootstrap por cuenta, regresiones de rotación brutas y netas, errores estándar, diagnóstico de la pendiente bruta |
+| **[REF] Árbitro / editor científico** | pre-análisis, interpretación de cada escenario, límites de los estimadores y conclusiones |
+
+**Fecha:** 10 de septiembre de 2026 · **Semilla maestra:** `20260910` · **Tiempo de ejecución:** ≈ {{runtime_min}} min en la última ejecución completa (la cifra exacta de esta ejecución está en la última celda).
+
+**Cómo correrlo.** El simulador es `simulador.py`: `python simulador.py` corre los ocho escenarios con sus estimadores y guarda la tabla de resultados en `resultados/tabla_simulador.csv` (≈ 1 min). El informe completo es este cuaderno: se abre en Jupyter desde `C:\ifi\5\Comportamiento\proyecto_1` y se ejecuta con *Restart & Run All*. Reescribe `simulador.py` y los tres módulos que importa (`simlib_precios.py`, `simlib_agentes.py`, `simlib_estimadores.py`), las figuras (`figuras/`) y las tablas (`resultados/`), y exporta `informe.md`. Requiere Python ≥ 3.10 con numpy, pandas, scipy y matplotlib; las versiones usadas se imprimen abajo y en la última celda.
+
+#%% code
+import hashlib
+import json
+import platform
+import time
+from pathlib import Path
+
+import matplotlib
+import numpy as np
+import pandas as pd
+import scipy
+
+RUN_START = time.perf_counter()
+MASTER_SEED = 20260910
+ROOT = Path.cwd()
+assert (ROOT / "simulador_sesgos_conductuales.ipynb").exists(), "run the notebook from its own folder (proyecto_1)"
+for sub in ("figuras", "resultados"):
+    (ROOT / sub).mkdir(exist_ok=True)
+# Keep the master table of the previous run (if any) to prove reproducibility at the end.
+PREV_MASTER = ROOT / "resultados" / "tabla_maestra.csv"
+previous_master = pd.read_csv(PREV_MASTER) if PREV_MASTER.exists() else None
+VERSIONS = {"python": platform.python_version(), "numpy": np.__version__, "pandas": pd.__version__,
+            "scipy": scipy.__version__, "matplotlib": matplotlib.__version__}
+print(" | ".join(f"{k} {v}" for k, v in VERSIONS.items()), f"| semilla maestra {MASTER_SEED}")
+
+#%% md informe
+## 1. Resumen ejecutivo
+**[REF]**
+
+**Qué se inyectó.** Dos sesgos con magnitudes registradas antes de ver resultados:
+* disposición $\delta$: el riesgo diario de venta se multiplica por $1\pm\delta$ según el signo frente al costo;
+* sobre-precisión $\kappa$: escala el riesgo base.
+
+Se aplicaron a 1,000 cuentas por escenario, sobre 100 valores y 756 días de un modelo de factores con alfa cero, y se recuperaron con los estimadores de Odean (1998) y Barber–Odean (2000).
+
+**Qué se recuperó.**
+* PGR − PLR crece con $\delta$ (E2 {{diff_S2}}, E3 {{diff_S3}}), y la razón de E2 ({{ratio_S2}}) coincide con $(1+\delta)/(1-\delta)=1.86$.
+* El nulo queda quieto (E1: {{diff_S1}}).
+* La pendiente neta mide el costo por unidad de rotación (≈ −{{bc_S4}} pp).
+* La prueba de fuga es nula (p = {{leak120_p}}).
+
+**Qué se rompió.**
+1. Rebalanceo y creencia en reversión, ambos con $\delta=0$, producen una disposición "significativa" (E7 {{diff_S7}}, E8 {{diff_S8}}). En E7, contar un recorte como una realización completa fabrica casi todo el efecto: con la convención fraccional queda en {{frac_S7}}.
+2. Con disposición, la MCO de rotación da una β neta de **{{bn_S3}}** ("operar paga") por causalidad inversa. La IV con la intensidad *ex ante* la corrige ({{ivn_S3}}).
+3. PGR − PLR depende de la historia del mercado. Con $\delta=0.8$, su dispersión entre {{R_MC}} mundos es {{mc_ratio_d_S3}} veces el error estándar del bootstrap por cuenta, que sólo vale condicional a la trayectoria.
+4. La β neta no mide la dosis de $\kappa$: su pendiente de costos queda plana entre E4 y E5.
+5. $\kappa$ infla PGR − PLR sin tocar $\delta$ (E6).
+
+En el nulo, la β bruta rechaza al 5 %. El Monte Carlo lo identifica como un error tipo I (0 rechazos en {{R_MC}} mundos), y se reporta sin cambiar la semilla. Se acertaron {{hits}} de {{n_rules}} predicciones registradas.
+
+#%% md
+## 2. Lectura de fuentes
+**[REF]** La carpeta del curso (`C:\ifi\5\Comportamiento`, un nivel arriba de `proyecto_1`) contiene cuatro presentaciones Beamer; ninguna es un resumen de artículo. De cada una se tomó lo siguiente.
+
+| Archivo | Qué es | Qué se tomó |
+|---|---|---|
+| `001-vnm.tex` | Utilidad esperada, axiomas vNM, Arrow–Pratt, CRRA/CARA, Allais, Rabin | Ningún requisito del proyecto. Tema recurrente usado en §7.5: una aproximación local (aquí $PGR/PLR\approx(1+\delta)/(1-\delta)$) extrapolada fuera de su rango falla. |
+| `002-mean-variance.tex` | Markowitz, Merton (1980), Chopra–Ziemba, Jagannathan–Ma | Definición de rotación $\tfrac12\sum_i\lvert\Delta w_i\rvert$ (usada: ½·(compras+ventas)/riqueza). El error estándar de una media es $\sigma/\sqrt{T}$: con 3 años la prueba de fuga sólo detecta fugas de decenas de puntos base. |
+| `003-prospect-theory.tex` | Función de valor ($\alpha=\beta=0.88$, $\lambda=2.25$), ponderación de probabilidades, punto de referencia | **Odean (1998): PGR = 0.148, PLR = 0.098** (razón 1.51, diferencia 0.050). El precio de compra como punto de referencia; "el punto de referencia no está modelado". |
+| `004-behavioral-biases.tex` | **La consigna del Proyecto 1** y la evidencia de sesgos | Pistas A (PGR/PLR) y B (rendimiento neto contra rotación, comparando coeficientes bruto y neto); "estimar con el error estándar correcto y descartar al menos dos explicaciones rivales"; pre-análisis antes de ver resultados; máximo 6 páginas y código reproducible; "un nulo limpio vale más que un resultado significativo con un confusor sin atender". Referencias: Barber–Odean (2000): rendimiento bruto plano por quintil de rotación y **6.5 puntos/año** perdidos por el quintil más activo (17.9 / 16.4 / 11.4 %); Odean (1999): lo comprado rindió **3.2 puntos menos** que lo vendido al año siguiente, antes de costos; Barber–Odean (2001): género como instrumento (hombres operan 45 % más); Barberis–Xiong (2009): la teoría prospectiva no implica limpiamente el efecto; Grinblatt–Han (2005): el *overhang* de ganancias absorbe buena parte del momento; explicaciones rivales: utilidad de realización, creencia en reversión, aversión al arrepentimiento, motivo fiscal (que predice lo contrario salvo en diciembre). |
+
+**Discrepancias con el prompt (según la regla, ganan los `.tex`):**
+1. **"Dos pistas, elija una."** El prompt pide ambos estimadores. Se declara **A** como hipótesis principal y B como estimador de control cruzado. Correr ambos no contradice la consigna; es lo que permite la validación cruzada del §7.5.
+2. **"Máximo 6 páginas."** `informe.md` es el entregable de ≤ 6 páginas (celdas marcadas `informe` más la tabla maestra); este cuaderno es el código reproducible y el apéndice técnico completo.
+3. **Rúbrica y ponderaciones:** los `.tex` remiten a "the handout", que no está en la carpeta. No hay ponderaciones que extraer; se usan las prioridades del prompt como sustituto.
+4. **Notación:** $\delta_i,\kappa_i,W_i,n_i$ y la tabla de escenarios sólo existen en el prompt. En los `.tex`, $\beta$ es la curvatura del brazo de pérdidas; aquí $\beta$ es la pendiente de rotación y la curvatura se llamaría $\alpha_{PT}$ (no se usa, porque el mecanismo principal es el (A)).
+
+#%% md informe
+## 3. Diseño del simulador
+**[SIM]**
+
+**En una línea.** Una trayectoria de precios de un modelo de factores con alfa cero se genera **antes** que los agentes. Sobre ella, 1,000 cuentas por escenario operan con un riesgo diario de venta que se multiplica por $1+\delta$ sobre el costo promedio y por $1-\delta$ debajo de él; $\kappa$ escala el riesgo base. Recompran valores elegidos al azar el mismo día y pagan comisión y diferencial. El econometrista recibe sólo el "estado de cuenta": fotografías previas a la operación en cada día de venta, operaciones y valores diarios. El diseño está implementado en `simulador.py`, el archivo principal, que importa `simlib_precios.py` (precios), `simlib_agentes.py` (agentes y mecanismo inyectado) y `simlib_estimadores.py` (estimadores).
+
+#%% md
+### 3.1 Precios: modelo de un factor de mercado más tres factores de estilo
+$$r_{s,t}=\beta_s\left(\tfrac{\mu_M}{252}+f_{M,t}\right)+\textstyle\sum_{k=1}^{3}b_{s,k}f_{k,t}+\varepsilon_{s,t},\qquad f_M\sim\mathcal N\!\left(0,\tfrac{0.16^2}{252}\right),\; f_k\sim\mathcal N\!\left(0,\tfrac{0.05^2}{252}\right),\; \varepsilon_{s,t}\sim\mathcal N\!\left(0,\tfrac{\sigma_{\varepsilon,s}^2}{252}\right)$$
+
+* 100 valores, 756 días hábiles (3 años). $\beta_s\sim\mathcal N(1,0.3^2)$ truncada a $[0.3,1.8]$, $b_{s,k}\sim\mathcal N(0,1)$, $\sigma_{\varepsilon,s}\sim U(20\%,40\%)$, $\mu_M=7\,\%$ anual, tasa libre 0 (todo es rendimiento en exceso). Los precios iniciales son log-uniformes entre \$10 y \$150 y se cotizan al centavo.
+* **$E[r_s]=\beta_s\mu_M$: el alfa de todos los valores es cero.** Los rendimientos esperados sólo difieren por riesgo de mercado remunerado y los factores de estilo no tienen prima. "Nadie opera informado" significa aquí que no existe alfa que encontrar.
+* Correlación promedio por pares: {{corr_implied}} implícita y {{corr_realized}} realizada. Volatilidad total media: {{vol_implied}} anual. El mercado realizado en esta trayectoria rindió **{{mkt_realized}} %/año**, con volatilidad de {{mkt_vol}} %.
+
+**Qué cambia frente a un GBM i.i.d.**
+1. Los choques comunes hacen que las cuentas **no sean independientes** (comparten valores), así que los SE transversales pueden quedarse cortos; esto se mide en §7.5.
+2. Con betas heterogéneas, rotar cartera cambia la exposición al mercado. Vender ganadoras en un mercado al alza baja la beta, de modo que la rotación es un *proxy* ruidoso del riesgo y el control de beta de la regresión tiene algo real que absorber (§9.4).
+3. Toda la muestra es **una** realización del mercado, y de ella depende cuánto pesa el arrastre de caja (§9).
+
+#%% md
+### 3.2 Agentes
+
+| Primitivo | Distribución | Justificación |
+|---|---|---|
+| $W_i$ capital inicial | log-uniforme en [\$10,000, \$500,000] | La riqueza es sesgada a la derecha; cada orden de magnitud es igual de probable. Cubre desde cuentas minoristas pequeñas hasta grandes. |
+| $n_i$ posiciones | entero uniforme {5,…,30} | Rango del enunciado. Es independiente de $W_i$, así que el tamaño de posición $W_i/n_i$ varía de \$333 a \$100,000 y la comisión fija genera heterogeneidad real de costos. |
+| $\ell_i$ intensidad base | $U(0.25,1.25)$ ventas por posición y año | Necesidad de liquidez exógena. Da variación *ex ante* de la rotación en todos los escenarios (incluso con $\kappa=0$), y es lo que hace posible el instrumento del §9. |
+| $\delta_i$ disposición | **constante poblacional** en E1–E8; $U(0,1)$ en E9 | "δ = 0.3" se lee como constante: cada cuenta tiene exactamente el valor inyectado. E9 agrega la variación transversal que exigen los diagnósticos del §10. |
+| $\kappa_i$ sobre-precisión | igual que $\delta_i$ | $h_{0,i}=\ell_i(1+3\kappa_i)/252$: con $\kappa=1$ la intensidad base se cuadruplica. |
+
+$\delta_i$ y $\kappa_i$ salen de **sub-flujos aleatorios distintos** (`child_seed(seed, 0, 3)` y `child_seed(seed, 0, 4)`): son independientes por construcción, no por casualidad. La cópula gaussiana sólo se activa a propósito en la corrida mal especificada del §10.
+
+#%% md
+### 3.3 Costos y la definición de rendimiento bruto y neto
+* **Comisión:** \$10 por boleto, de compra o de venta (nivel de un corredor de descuento antes de 2019). Sobre la operación mediana de la muestra, \${{median_trade}}, equivale a **{{median_trade_bps}} pb**; sobre la operación media, \${{mean_trade}}, a {{mean_trade_bps}} pb.
+* **Diferencial:** 20 pb cotizados (10 pb por lado), típico de acciones de capitalización media. En dólares son \$0.02 por acción de \$10 y \$0.20 por acción de \$100.
+* **Convención (dónde entra el diferencial).** Los precios del simulador son precios *medios*. Las compras se ejecutan a $mid\,(1+s/2)$ y las ventas a $mid\,(1-s/2)$. El rendimiento **bruto** marca todas las posiciones a precio medio, también el día de la operación, así que no contiene comisiones ni diferencial. El costo del diferencial, $\tfrac{s}{2}\times$valor operado a precio medio, va a la línea de costos. **Neto = bruto − (comisiones + diferencial)/riqueza del día anterior**, día por día; con medias aritméticas anualizadas, $r^{neto}_i=r^{bruto}_i-c_i$ es exacta cuenta por cuenta. La versión marcada a precio de ejecución, que es el error definicional, se calcula aparte sólo como ablación (§9).
+* La dotación del día 0 se compra a precio medio sin costo y no cuenta como rotación.
+* **Rotación** $=\tfrac12(\text{compras}+\text{ventas})$ a precio medio, dividida entre la riqueza media y anualizada. Entran compras y ventas; con reinversión el mismo día son casi iguales.
+
+#%% md
+### 3.4 El mecanismo inyectado y por qué está un nivel debajo de PGR
+Cada día, cada posición abierta se vende con probabilidad
+
+$$h_{i,s,t}=h_{0,i}\times\begin{cases}1+\delta_i & mid_{s,t}>c_{i,s}+\$0.005\\ 1-\delta_i & mid_{s,t}<c_{i,s}-\$0.005\\ 1 & \text{empate}\end{cases}$$
+
+donde $c_{i,s}$ es el costo promedio de los lotes abiertos (el punto de referencia del agente). **PGR no se fija en ningún lado.** Es un cociente calculado sólo en días de venta y sobre todas las posiciones, y depende de $\delta$ pero también de $n_i$, de la composición ganadoras/perdedoras que produce la trayectoria de precios y de cuántas ventas caen el mismo día. Si la fracción de ganadoras $f$ fuera igual para todas las cuentas, $PGR\approx(1+\delta)/[n(1+\delta(2f-1))]$ y $PLR\approx(1-\delta)/[n(1+\delta(2f-1))]$: el mapeo $\delta\mapsto PGR-PLR$ ni siquiera es lineal. La rotación también es emergente: $\kappa$ sólo mueve $h_0$.
+
+* **Ventas parciales:** 25 % de las ventas disparadas son recortes del 50 % (si valen ≥ \$100). Lo obtenido compra más de otra posición elegida al azar, y así nacen las posiciones con varios lotes que hacen relevantes las convenciones de base de costo.
+* **Recompra (lado comprador):** una salida total se reemplaza por un valor **elegido uniformemente** entre los que la cuenta no posee ni vendió hoy. La elección no usa ninguna información de precios, así que es ortogonal a los rendimientos futuros por construcción.
+* **Rezago de redespliegue:** **el mismo día** ($k=0$), sin arrastre de caja. Ablación con $k=21$ días en el §9.
+
+#%% md
+### 3.5 Confusores (E7, E8), ambos con $\delta=0$ y usando sólo precios pasados
+* **Rebalanceo (E7):** el objetivo es **peso igual** $1/n_i$ de la riqueza total, con **banda de tolerancia del 25 %**. Si una posición pesa más de $1.25/n_i$, se recorta al objetivo (si el recorte vale ≥ \$100) y lo obtenido compra la posición **más infraponderada**. Las ganadoras se desvían hacia arriba, y recortarlas se ve igual que realizar ganancias.
+* **Creencia en reversión (E8):** si el rendimiento de 40 días de un valor supera 12 %, el agente espera una reversión y multiplica su riesgo de venta por 5. **La creencia es falsa**: los choques son i.i.d. y no hay reversión. La regla sólo mira precios pasados.
+
+#%% md
+### 3.6 Pseudocódigo del ciclo diario (cierre del día $t$)
+```text
+precios[0..T] ya existen; en el día t el agente sólo lee precios[0..t]
+para t = 1..T:
+    marcar a precio medio -> V_pre ;  r_bruto = V_pre / V_post(t-1) - 1
+    para cada posición abierta: signo = sgn(mid_t - costo_promedio)   (empate si |.| < $0.005)
+    h = h0 * (1 + delta*signo) * [1 + 4*1(rend_40d > 12%)]          <- factor sólo en E8
+    vender si U < h  (25 %: recorte de la mitad);  E7: recortar si peso > 1.25/n
+    GUARDAR el estado previo de toda cuenta que vende            <- insumo del econometrista
+    liberar lotes FIFO; lo obtenido va a fondos de redespliegue
+    liberar los fondos que vencen hoy (k = 0: hoy mismo):
+        salida total   -> valor uniforme al azar no poseído
+        recorte        -> posición poseída al azar  |  E7: la más infraponderada
+    registrar comisiones, diferencial y valor operado -> V_post
+```
+
+#%% md
+### 3.7 Escenarios y flujos de semillas
+En el texto los escenarios se llaman E1–E8; en el código y en las tablas, `S1`–`S8` (las claves con que se registraron las predicciones). Los ocho escenarios del enunciado regeneran la población completa sobre **la misma trayectoria de precios** (números aleatorios comunes: las diferencias entre escenarios son de comportamiento, no de suerte de mercado). Las corridas adicionales son **agregados, no sustitutos**: E9, población heterogénea con $\delta_i,\kappa_i\sim U(0,1)$ independientes; E9m, la misma con corr($\delta,\kappa$) = 0.6; barridos de $\delta$ y $\kappa$; ablación de caja; mercado GBM; y Monte Carlo sobre trayectorias de precios.
+
+| # | Escenario | $\delta$ | $\kappa$ | Confusor | Expectativa del enunciado |
+|---|---|---|---|---|---|
+| E1 | Nulo | 0 | 0 | — | ambos estimadores quietos |
+| E2 | Disposición baja | 0.3 | 0 | — | disposición positiva, confianza quieta |
+| E3 | Disposición alta | 0.8 | 0 | — | disposición positiva y mayor |
+| E4 | Rotación baja | 0 | 0.3 | — | disposición quieta, confianza negativa |
+| E5 | Rotación alta | 0 | 0.8 | — | confianza más negativa |
+| E6 | Ambos | 0.8 | 0.8 | — | interacción |
+| E7 | Rebalanceo | 0 | 0 | rebalanceo | disposición espuria |
+| E8 | Reversión | 0 | 0 | creencia en reversión | disposición espuria |
+
+#%% md informe
+## 4. PRE-ANÁLISIS
+La celda siguiente se registró (hash SHA-256 y hora UTC) antes de escribir el módulo de estimadores. Se reproduce sin cambios y la celda de código que la sigue verifica que coincide con el registro. El mismo párrafo está copiado, como comentarios (`#`) en texto plano, al inicio de cada archivo `.py` del proyecto.
+
+#%% md informe preanalisis
+PREANALISIS
+
+#%% code
+REG = dict(line.split("=", 1) for line in (ROOT / "resultados" / "pre_analisis_registro.txt").read_text().split())
+for name in ("pre_analisis.md", "pre_analisis_reglas.json"):
+    digest = hashlib.sha256((ROOT / "resultados" / name).read_bytes()).hexdigest()
+    print(f"{name:26s} sha256 {digest[:20]}…  coincide con el registro: {digest == REG[name]}")
+nb_cells = json.loads((ROOT / "simulador_sesgos_conductuales.ipynb").read_text(encoding="utf-8"))["cells"]
+pre_cell = next("".join(c["source"]) for c in nb_cells if "preanalisis" in c["metadata"].get("tags", []))
+registered = (ROOT / "resultados" / "pre_analisis.md").read_text(encoding="utf-8").rstrip("\n")
+print("La celda de arriba es idéntica al texto registrado:", pre_cell == registered)
+print("Registrado (UTC):", REG["registered_utc"])
+RULES = json.loads((ROOT / "resultados" / "pre_analisis_reglas.json").read_text(encoding="utf-8"))
+pd.DataFrame({k: ["; ".join(" ".join(map(str, r)) for r in v)] for k, v in RULES.items()
+              if k != "description"}, index=["predicciones codificadas"]).T
